@@ -62,8 +62,8 @@ local TYPE_LITERAL = {
   [TYPE_HISTOGRAM] = "histogram",
 }
 
--- Error metric incremented for this library.
-local ERROR_METRIC_NAME = "nginx_metric_errors_total"
+-- Default name for error metric incremented by this library.
+local DEFAULT_ERROR_METRIC_NAME = "nginx_metric_errors_total"
 
 -- Default set of latency buckets, 5ms to 10s:
 local DEFAULT_BUCKETS = {0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.2, 0.3,
@@ -473,7 +473,7 @@ end
 --
 -- Returns:
 --   an object that should be used to register metrics.
-function Prometheus.init(dict_name, prefix)
+function Prometheus.init(dict_name, prefix, error_metric_name)
   local self = setmetatable({}, mt)
   dict_name = dict_name or "prometheus_metrics"
   self.dict_name = dict_name
@@ -483,18 +483,15 @@ function Prometheus.init(dict_name, prefix)
       "Please define the dictionary using `lua_shared_dict`.", 2)
   end
 
-  if prefix then
-    self.prefix = prefix
-  else
-    self.prefix = ''
-  end
+  self.prefix = prefix or ''
+  self.error_metric_name = error_metric_name or DEFAULT_ERROR_METRIC_NAME
 
   self.registry = {}
 
   self.initialized = true
 
-  self:counter(ERROR_METRIC_NAME, "Number of nginx-lua-prometheus errors")
-  self.dict:set(ERROR_METRIC_NAME, 0)
+  self:counter(self.error_metric_name, "Number of nginx-lua-prometheus errors")
+  self.dict:set(self.error_metric_name, 0)
   return self
 end
 
@@ -677,7 +674,7 @@ end
 -- Log an error, incrementing the error counter.
 function Prometheus:log_error(...)
   ngx.log(ngx.ERR, ...)
-  self.dict:incr(ERROR_METRIC_NAME, 1, 0)
+  self.dict:incr(self.error_metric_name, 1, 0)
 end
 
 -- Log an error that happened while setting up a dictionary key.
