@@ -5,13 +5,13 @@ version = "0.20200523-1"
 
 source = {
   url = "git://github.com/knyar/nginx-lua-prometheus.git",
-  tag = "0.20200523"
+  tag = "0.20200523",
 }
 
 description = {
   summary = "Prometheus metric library for Nginx",
   homepage = "https://github.com/knyar/nginx-lua-prometheus",
-  license = "MIT"
+  license = "MIT",
 }
 
 dependencies = {
@@ -22,6 +22,6 @@ build = {
     type = "builtin",
     modules = {
         ["prometheus"] = "prometheus.lua",
-        ["prometheus_resty_counter"] = 'prometheus_resty_counter.lua'
+        ["prometheus_resty_counter"] = 'prometheus_resty_counter.lua',
     }
 }
