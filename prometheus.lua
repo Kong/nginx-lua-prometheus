@@ -504,7 +504,7 @@ local function observe(self, value, label_values)
   c:incr(keys[self.bucket_count+3], 1)
 end
 
--- Delete all metrics for a given gauge or a counter.
+-- Delete all metrics for a given gauge, counter or a histogram.
 --
 -- This is like `del`, but will delete all time series for all previously
 -- recorded label values.
@@ -540,7 +540,9 @@ local function reset(self)
   for _, key in ipairs(keys) do
     local value, err = self._dict:get(key)
     if value then
-      -- without labels equal, or with labels and the part before { equals
+      -- For a metric to be deleted its name should either match exactly, or
+      -- have a prefix listed in `name_prefixes` (which ensures deletion of
+      -- metrics with label values).
       local remove = key == self.name
       if not remove then
         for name_prefix, name_prefix_length in pairs(name_prefixes) do
@@ -709,6 +711,7 @@ local function register(self, name, help, label_names, buckets, typ)
     _log_error = function(...) self:log_error(...) end,
     _log_error_kv = function(...) self:log_error_kv(...) end,
     _dict = self.dict,
+    reset = reset,
   }
   if typ < TYPE_HISTOGRAM then
     if typ == TYPE_GAUGE then
@@ -724,7 +727,6 @@ local function register(self, name, help, label_names, buckets, typ)
     metric.bucket_count = #metric.buckets
     metric.bucket_format = construct_bucket_format(metric.buckets)
   end
-  metric.reset = reset
 
   self.registry[name] = metric
   return metric
