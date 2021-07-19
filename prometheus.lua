@@ -55,7 +55,6 @@
 -- This library provides per-worker counters used to store counter metric
 -- increments. Copied from https://github.com/Kong/lua-resty-counter
 local resty_counter_lib = require("prometheus_resty_counter")
-local key_index_lib = require("prometheus_keys")
 
 local Prometheus = {}
 local mt = { __index = Prometheus }
@@ -79,8 +78,6 @@ local DEFAULT_SYNC_INTERVAL = 1
 local DEFAULT_BUCKETS = {0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.2, 0.3,
                          0.4, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 10}
 
--- Prefix for internal shared dictionary items.
-local KEY_INDEX_PREFIX = "__ngx_prom__"
 
 -- Accepted range of byte values for tailing bytes of utf8 strings.
 -- This is defined outside of the validate_utf8_string function as a const
@@ -225,9 +222,6 @@ local function check_metric_and_label_names(metric_name, label_names)
   if not metric_name:match("^[a-zA-Z_:][a-zA-Z0-9_:]*$") then
     return "Metric name '" .. metric_name .. "' is invalid"
   end
-  if metric_name:find(KEY_INDEX_PREFIX) == 1 then
-    return "Prefix '" .. KEY_INDEX_PREFIX .. "' is reserved for internal purposes"
-  end
   for _, label_name in ipairs(label_names or {}) do
     if label_name == "le" then
       return "Invalid label name 'le' in " .. metric_name
@@ -368,10 +362,6 @@ local function lookup_or_create(self, label_values)
     full_name = full_metric_name(self.name, self.label_names, label_values)
   end
   t[LEAF_KEY] = full_name
-  local err = self._key_index:add(full_name)
-  if err then
-    return nil, err
-  end
   return full_name
 end
 
@@ -409,7 +399,7 @@ local ERR_MSG_COUNTER_NOT_INITIALIZED = "counter not initialized! " ..
 --
 -- Args:
 --   self: a `metric` object, created by register().
---   value: numeric value to increment by. Can't be negative.
+--   value: numeric value to increment by. Can be negative.
 --   label_values: a list of label values, in the same order as label keys.
 local function inc_counter(self, value, label_values)
   -- counter is not allowed to decrease
@@ -463,7 +453,6 @@ local function del(self, label_values)
     ngx.sleep(self.parent.sync_interval)
   end
 
-  self._key_index:remove(k)
   _, err = self._dict:delete(k)
   if err then
     self._log_error("Error deleting key: ".. k .. ": " .. err)
@@ -560,7 +549,7 @@ local function reset(self)
     ngx.sleep(self.parent.sync_interval)
   end
 
-  local keys = self._key_index:list()
+  local keys = self._dict:get_keys(0)
   local name_prefixes = {}
   local name_prefix_length_base = #self.name
   if self.typ == TYPE_HISTOGRAM then
@@ -577,7 +566,7 @@ local function reset(self)
   end
 
   for _, key in ipairs(keys) do
-    local value, key_err = self._dict:get(key)
+    local value, err = self._dict:get(key)
     if value then
       -- For a metric to be deleted its name should either match exactly, or
       -- have a prefix listed in `name_prefixes` (which ensures deletion of
@@ -592,16 +581,13 @@ local function reset(self)
         end
       end
       if remove then
-        self._key_index:remove(key)
         local _, err = self._dict:safe_set(key, nil)
         if err then
           self._log_error("Error resetting '", key, "': ", err)
         end
       end
     else
-      if type(key_err) == "string" then
-        self._log_error("Error getting '", key, "': ", key_err)
-      end
+      self._log_error("Error getting '", key, "': ", err)
     end
   end
 
@@ -650,16 +636,11 @@ function Prometheus.init(dict_name, options_or_prefix)
   end
 
   self.registry = {}
-  self.key_index = key_index_lib.new(self.dict, KEY_INDEX_PREFIX)
 
   self.initialized = true
 
   self:counter(self.error_metric_name, "Number of nginx-lua-prometheus errors")
   self.dict:set(self.error_metric_name, 0)
-  local err = self.key_index:add(self.error_metric_name)
-  if err then
-    self:log_error(err)
-  end
 
   if ngx.get_phase() == 'init_worker' then
     self:init_worker(self.sync_interval)
@@ -757,7 +738,6 @@ local function register(self, name, help, label_names, buckets, typ)
     -- Store a reference for logging functions for faster lookup.
     _log_error = function(...) self:log_error(...) end,
     _log_error_kv = function(...) self:log_error_kv(...) end,
-    _key_index = self.key_index,
     _dict = self.dict,
     reset = reset,
   }
@@ -809,7 +789,7 @@ function Prometheus:metric_data()
   -- Force a manual sync of counter local state (mostly to make tests work).
   self._counter:sync()
 
-  local keys = self.key_index:list()
+  local keys = self.dict:get_keys(0)
   -- Prometheus server expects buckets of a histogram to appear in increasing
   -- numerical order of their label values.
   table.sort(keys)
@@ -837,9 +817,7 @@ function Prometheus:metric_data()
       key = fix_histogram_bucket_labels(key)
       table.insert(output, string.format("%s%s %s\n", self.prefix, key, value))
     else
-      if type(err) == "string" then
-        self:log_error("Error getting '", key, "': ", err)
-      end
+      self:log_error("Error getting '", key, "': ", err)
     end
   end
   return output
@@ -851,7 +829,7 @@ end
 -- It will get the metrics from the dictionary, sort them, and expose them
 -- aling with TYPE and HELP comments.
 function Prometheus:collect()
-  ngx.header.content_type = "text/plain"
+  ngx.header["Content-Type"] = "text/plain"
   ngx.print(self:metric_data())
 end
 
